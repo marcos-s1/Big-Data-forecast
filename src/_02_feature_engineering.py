@@ -200,9 +200,7 @@ def calculate_lagged_features(df_with_week_rank, week_windows, value_columns, ag
 
     return df_result
 
-calculate_week_of_month_udf = udf(calculate_week_of_month, IntegerType())
-
-def run_feature_engineering_pipeline(df, week_windows, value_columns, aggregation_functions, spark_session):
+def main(df, week_windows, value_columns, aggregation_functions, spark_session):
     """
     Função principal para calcular features defasadas para o modelo.
 
@@ -221,15 +219,8 @@ def run_feature_engineering_pipeline(df, week_windows, value_columns, aggregatio
         print("DataFrame de entrada para a função main é None.")
         return None
 
-    # Passo 0: Criar identificador de semana
-    df = df.withColumn(
-          'week_of_month',
-          calculate_week_of_month_udf(col('transaction_date'), col('reference_date'))
-      )
-
     # Passo 1: Criar identificador de semana global e rank
     df_with_week_ids_and_rank = create_global_week_id_and_rank(df)
-    print(df_with_week_ids_and_rank.show(5))
 
     # Passo 2: Calcular features defasadas usando o rank da semana
     final_df_with_lagged_features = calculate_lagged_features(
