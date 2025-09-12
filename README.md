@@ -62,7 +62,6 @@ O Apache Spark 3.5.1 é compatível com o **JDK 17**. Para evitar erros, siga es
     java -version
     echo %JAVA_HOME%
     ```
-
     O resultado deve mostrar a versão 17 do Java e o caminho correto do JDK.
 
 ### 2. Configuração do Ambiente Python 🐍
@@ -77,12 +76,39 @@ Para garantir que o PySpark use o ambiente virtual do seu projeto, você precisa
 **Exemplo:**
 
 - **No Windows:**
-
-C:\Users\SeuUsuario\Caminho\Para\O\Projeto.venv\Scripts\python.exe
+`C:\Users\SeuUsuario\Caminho\Para\O\Projeto\.venv\Scripts\python.exe`
 
 - **No macOS/Linux:**
+`/home/seu-usuario/caminho/para/o/projeto/.venv/bin/python`
 
-/home/seu-usuario/caminho/para/o/projeto/.venv/bin/python
+### 3. Configuração do Hadoop (Apenas para Windows) ⚙️
+
+Este passo é crucial para usuários de Windows, pois o PySpark depende de um ambiente Hadoop local para operações de arquivos.
+
+1.  **Baixe os Arquivos Essenciais:**
+    - Baixe os arquivos `winutils.exe` e `hadoop.dll` para a versão do Hadoop compatível com o seu Spark.
+    - Um repositório comum para isso é: `https://github.com/steveloughran/winutils/`
+
+2.  **Crie a Pasta do Hadoop:**
+    - Crie uma pasta `hadoop` na raiz do seu disco `C:` (ex: `C:\hadoop`).
+    - Dentro dela, crie uma subpasta `bin` (ex: `C:\hadoop\bin`).
+
+3.  **Mova os Arquivos:**
+    - Mova `winutils.exe` e `hadoop.dll` para a pasta `C:\hadoop\bin`.
+
+4.  **Configure a Variável de Ambiente `HADOOP_HOME`:**
+    - Siga o mesmo processo de "Variáveis de Ambiente" usado para o `JAVA_HOME`.
+    - Crie uma nova variável de sistema:
+        - **Nome:** `HADOOP_HOME`
+        - **Valor:** `C:\hadoop`
+    - Edite a variável de sistema `Path` e adicione o caminho `C:\hadoop\bin`.
+
+5.  **Verifique a configuração:**
+    No terminal, reinicie o ambiente e execute:
+    ```bash
+    echo %HADOOP_HOME%
+    ```
+    O resultado deve ser `C:\hadoop`.
 
 ---
 
