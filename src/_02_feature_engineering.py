@@ -1,9 +1,11 @@
 from datetime import datetime, timedelta
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, year, month, weekofyear, dense_rank, lag, concat, lit, countDistinct, sum, avg, min, max, stddev, when, size, collect_set, lpad, cast
-from pyspark.sql.window import Window # Importar a classe Window
+from pyspark.sql.functions import col, year, month, weekofyear, dense_rank, lag, concat, lit, countDistinct, count, sum, avg, min, max, stddev, when, size, collect_set, lpad, cast
 from pyspark.sql.functions import udf, col
 from pyspark.sql.types import IntegerType
+import os
+from pyspark.sql.window import Window 
+from datetime import datetime
 
 def calculate_week_of_month(transaction_date, reference_date):
     """
@@ -66,141 +68,151 @@ def create_global_week_id_and_rank(df):
     )
     return df_with_week_rank
 
-def calculate_lagged_features(df_with_week_rank, week_windows, value_columns, aggregation_functions):
+def calculate_lagged_features_optimized(df, week_windows, value_columns, aggregation_functions):
     """
-    Calcula features defasadas (lagged features) para diferentes janelas de semanas,
-    colunas de valor e funções de agregação, usando o rank da semana para definir
-    a janela e garantindo valores -1 para as primeiras semanas.
+    Calcula features defasadas e de janela móvel de forma otimizada.
 
     Args:
-        df_with_week_rank (Spark DataFrame): O DataFrame com as colunas 'global_week_id' e 'week_rank'.
-        week_windows (list): Lista de números inteiros representando as janelas de semanas (ex: [1, 3, 6]).
-        value_columns (list): Lista de strings com os nomes das colunas numéricas para aplicar as agregações
-                              (ex: ['quantity', 'gross_value']).
-        aggregation_functions (list): Lista de strings representando as funções de agregação a serem aplicadas
-                                     (exclui 'count' que é específico para distinct_products). Suportadas:
-                                     'sum', 'avg', 'min', 'max', 'stddev'.
+        df (Spark DataFrame): O DataFrame de entrada.
+        week_windows (list): Lista de números inteiros representando as janelas de semanas.
+        value_columns (list): Lista de strings com os nomes das colunas numéricas para aplicar as agregações.
+        aggregation_functions (list): Lista de strings representando as funções de agregação.
 
     Returns:
         Spark DataFrame: O DataFrame original com as novas colunas de features defasadas.
     """
-    print("Calculando features defasadas...")
-    df_result = df_with_week_rank
-
-    # Define a janela base para o cálculo defasado usando rangeBetween no week_rank.
-    # rangeBetween(-window, -1) define uma janela que inclui todos os ranks de 'week_rank - window' até 'week_rank - 1'.
-    # Esta janela opera sobre o conjunto de linhas dentro do partitionBy e orderBy.
-    # A janela é definida uma vez e usada para diferentes agregações e janelas de tempo.
-    base_lag_window_spec = lambda window: Window.partitionBy("internal_store_id").orderBy("week_rank").rangeBetween(-window, -1)
-
-    # Lista para armazenar os nomes das colunas defasadas criadas
-    lagged_columns_created = []
-
-    # --- Calcular Contagem Distinta de Produtos nas Janelas Defasadas ('count') ---
-    # Este é tratado separadamente pois a agregação é sempre em internal_product_id
+    print("Calculando features defasadas e de janela móvel de forma otimizada...")
+    
+    df_result = df
+    
+    # Adicionando a contagem distinta de produtos por loja por semana
     if 'count' in aggregation_functions:
-        print("Calculando contagem distinta de produtos defasada...")
+        # A sua lógica: criar um dataframe auxiliar com a contagem distinta por semana e loja
+        print("Calculando contagem distinta de produtos por semana...")
+        df_distinct_products_weekly = df_result.groupby('pdv', 'week_rank').agg(
+            count('produto').alias('distinct_products_count_weekly')
+        ).dropDuplicates(['pdv', 'week_rank'])
+        
+        # A correção principal: calculamos a janela móvel neste dataframe auxiliar
+        # antes de fazer o join, garantindo que o calculo seja preciso
+        distinct_products_window_spec = lambda window: Window.partitionBy('pdv').orderBy(col('week_rank')).rangeBetween(-window, -1)
+        
         for window in week_windows:
-            distinct_col_name = f"distinct_products_last_{window}_weeks"
-            collected_col_name = f"collected_products_last_{window}_weeks_temp"
-
-            # --- Nota sobre este cálculo (Contagem Distinta em Janela com Frame): ---
-            # Calcular countDistinct diretamente em window functions com frames (rangeBetween/rowsBetween)
-            # é uma limitação conhecida do Spark e geralmente causa AnalysisException (DISTINCT_WINDOW_FUNCTION_UNSUPPORTED).
-            # A abordagem com size(collect_set(...)) é um workaround comum, mas também pode falhar com MISSING_GROUP_BY
-            # devido a problemas de planejamento interno do Spark com esta combinação em alguns cenários.
-            # A lógica abaixo tenta implementar o cálculo da contagem distinta sobre a janela defasada
-            # (distintos produtos em TODAS as linhas da janela defasada), mas PODE resultar em erro
-            # dependendo do ambiente Spark e dados. Uma alternativa mais robusta para obter métricas
-            # de janela de tempo com agregação distinta NO NÍVEL SEMANAL é agregar a contagem
-            # distinta semanalmente PRIMEIRO (countDistinct por semana) e depois aplicar funções
-            # de janela (como sum) nos totais semanais agregados (abordagem em 2 etapas).
-            # A lógica abaixo tenta calcular a contagem distinta sobre a janela defasada no nível da transação.
-
-            # Use collect_set in the window function and then size in a chained operation
-            # Esta é a tentativa de calcular o distinct count sobre a janela.
-            df_result = df_result.withColumn(
-                collected_col_name,
-                collect_set("internal_product_id").over(base_lag_window_spec(window))
-            ).withColumn(
-                distinct_col_name,
-                size(col(collected_col_name)) # Calculate size after the window function
-            ).drop(collected_col_name) # Drop the intermediate column
-
-            # Garantir que as primeiras 'window' semanas tenham valor -1
-            df_result = df_result.withColumn(
-                distinct_col_name,
-                when(col("week_rank") <= window, -1).otherwise(col(distinct_col_name))
+            final_distinct_count = when(
+                col('week_rank') <= window,
+                lit(None)
+            ).otherwise(
+                sum(col('distinct_products_count_weekly')).over(distinct_products_window_spec(window))
             )
-            lagged_columns_created.append(distinct_col_name)
+            df_distinct_products_weekly = df_distinct_products_weekly.withColumn(
+                f'distinct_products_last_{window}_weeks', final_distinct_count
+            )
+        
+        # Agora, fazemos o join deste dataframe auxiliar com o principal
+        df_result = df_result.join(
+            df_distinct_products_weekly.drop('distinct_products_count_weekly'), 
+            on=['pdv', 'week_rank'], 
+            how='left'
+        )
 
-        # Remove 'count' da lista de aggregation_functions para o próximo loop
-        aggregation_functions_for_values = [f for f in aggregation_functions if f != 'count']
+    # Janela para lag-N e agregados móveis
+    base_window_spec = lambda window: Window.partitionBy("pdv", "produto").orderBy(col('week_rank')).rangeBetween(-window, -1)
+    lag_window_spec = Window.partitionBy("pdv", "produto").orderBy(col('week_rank'))
+    
+    expressions = []
+    
+    original_cols = [c for c in df_result.columns if 'distinct_products' not in c]
+    expressions.extend([col(c) for c in original_cols])
+    
+    # Adicionamos as colunas de contagem distintas que acabamos de criar
+    distinct_cols = [c for c in df_result.columns if 'distinct_products' in c]
+    expressions.extend([col(c) for c in distinct_cols])
+
+    for window in week_windows:
+        expressions.append(
+            lag(col('quantity'), offset=window).over(lag_window_spec).alias(f'Vendas_Anteriores_lag_{window}')
+        )
+
+    for window in week_windows:
+        for col_name in value_columns:
+            for func_name in aggregation_functions:
+                agg_expr = None
+                if func_name == 'sum':
+                    agg_expr = sum(col(col_name))
+                elif func_name == 'avg' or func_name == 'mean':
+                    agg_expr = avg(col(col_name))
+                elif func_name == 'min':
+                    agg_expr = min(col(col_name))
+                elif func_name == 'max':
+                    agg_expr = max(col(col_name))
+                elif func_name == 'std' or func_name == 'stddev':
+                    agg_expr = stddev(col(col_name))
+
+                if agg_expr is not None:
+                    final_agg_expr = when(
+                        col('week_rank') <= window,
+                        lit(None)
+                    ).otherwise(
+                        agg_expr.over(base_window_spec(window))
+                    )
+                    expressions.append(final_agg_expr.alias(f'{func_name}_{col_name}_last_{window}_weeks'))
+    
+    df_with_features = df_result.select(expressions)
+    df_with_features = df_with_features.fillna(-1) 
+    
+    return df_with_features
+
+def aggregate_dataframe(df, ignore_cols: list, agg_cols: list, agg_func_type: str):
+    """
+    Aggregates a Spark DataFrame by all columns except those in ignore_cols,
+    applying a specified aggregation function to columns in agg_cols.
+
+    Args:
+        df (DataFrame): The input Spark DataFrame.
+        ignore_cols (list): A list of column names to exclude from the grouping keys.
+        agg_cols (list): A list of column names to apply the aggregation function to.
+        agg_func_type (str): The type of aggregation function ('mean', 'sum', 'min').
+
+    Returns:
+        DataFrame: The aggregated Spark DataFrame.
+    """
+    # Get all column names from the DataFrame
+    all_cols = df.columns
+
+    # Determine the grouping columns (all columns not in ignore_cols)
+    group_cols = [c for c in all_cols if c not in ignore_cols and c not in agg_cols]
+
+    # Prepare the aggregation expressions
+    agg_exprs = []
+    for col_name in agg_cols:
+        if col_name in all_cols:
+            if agg_func_type.lower() == 'mean':
+                agg_exprs.append(mean(col(col_name)).alias(f'{col_name}'))
+            elif agg_func_type.lower() == 'sum':
+                agg_exprs.append(sum(col(col_name)).alias(f'{col_name}'))
+            elif agg_func_type.lower() == 'min':
+                agg_exprs.append(min(col(col_name)).alias(f'{col_name}'))
+            else:
+                print(f"Warning: Unsupported aggregation function type '{agg_func_type}'. Skipping column '{col_name}'.")
+        else:
+             print(f"Warning: Aggregation column '{col_name}' not found in DataFrame. Skipping.")
+
+    if not group_cols:
+        print("Warning: No grouping columns determined. Performing a global aggregation.")
+        if agg_exprs:
+            return df.agg(*agg_exprs)
+        else:
+            print("No aggregation expressions defined.")
+            return df
+    elif not agg_exprs:
+        print("Warning: No valid aggregation expressions determined. Returning DataFrame grouped by group_cols without aggregations.")
+        return df.select(group_cols).distinct()
     else:
-        aggregation_functions_for_values = aggregation_functions
+        print(f"Grouping by: {group_cols}")
+        print(f"Applying '{agg_func_type}' aggregation to: {agg_cols}")
+        return df.groupBy(group_cols).agg(*agg_exprs)
 
-
-    # --- Calcular Outras Agregações para as Colunas de Valor Especificadas ---
-    if aggregation_functions_for_values and value_columns:
-        print("Calculando agregações defasadas para colunas de valor...")
-        for window in week_windows:
-            for col_name_to_agg in value_columns:
-                for func_name in aggregation_functions_for_values:
-                    output_col_name = None
-                    if func_name == 'sum':
-                        output_col_name = f"sum_{col_name_to_agg}_last_{window}_weeks"
-                        df_result = df_result.withColumn(
-                            output_col_name,
-                            sum(col(col_name_to_agg)).over(base_lag_window_spec(window))
-                        )
-                    elif func_name == 'avg' or func_name == 'mean':
-                         output_col_name = f"avg_{col_name_to_agg}_last_{window}_weeks"
-                         df_result = df_result.withColumn(
-                            output_col_name,
-                            avg(col(col_name_to_agg)).over(base_lag_window_spec(window))
-                        )
-                    elif func_name == 'min':
-                         output_col_name = f"min_{col_name_to_agg}_last_{window}_weeks"
-                         df_result = df_result.withColumn(
-                            output_col_name,
-                            min(col(col_name_to_agg)).over(base_lag_window_spec(window))
-                        )
-                    elif func_name == 'max':
-                        output_col_name = f"max_{col_name_to_agg}_last_{window}_weeks"
-                        df_result = df_result.withColumn(
-                            output_col_name,
-                            max(col(col_name_to_agg)).over(base_lag_window_spec(window))
-                        )
-                    elif func_name == 'std' or func_name == 'stddev':
-                         output_col_name = f"stddev_{col_name_to_agg}_last_{window}_weeks"
-                         df_result = df_result.withColumn(
-                            output_col_name,
-                            stddev(col(col_name_to_agg)).over(base_lag_window_spec(window))
-                        )
-                    else:
-                        print(f"Aviso: Função de agregação '{func_name}' não suportada para colunas de valor.")
-                        continue # Pula para a próxima função se não for suportada
-
-                    # Garantir que as primeiras 'window' semanas tenham valor -1
-                    if output_col_name: # Verifica se a coluna foi realmente criada
-                         df_result = df_result.withColumn(
-                            output_col_name,
-                            when(col("week_rank") <= window, -1).otherwise(col(output_col_name))
-                         )
-                         lagged_columns_created.append(output_col_name)
-    elif aggregation_functions_for_values and not value_columns:
-        print("Aviso: Funções de agregação de valor especificadas, mas nenhuma coluna de valor fornecida.")
-
-
-    # Preenche quaisquer NULOS remanescentes (que não foram definidos como -1 pela condição 'when') com -1
-    # Isso pode acontecer por exemplo se uma loja não tiver NENHUMA transação em uma semana que deveria estar na janela.
-    # A lista de colunas a preencher deve ser as colunas defasadas que foram realmente criadas.
-    df_result = df_result.fillna(-1, subset=lagged_columns_created)
-
-
-    return df_result
-
-def main(df, week_windows, value_columns, aggregation_functions, spark_session):
+def feature_engineering_pipeline(df, week_windows, value_columns, aggregation_functions, spark_session):
     """
     Função principal para calcular features defasadas para o modelo.
 
@@ -219,11 +231,48 @@ def main(df, week_windows, value_columns, aggregation_functions, spark_session):
         print("DataFrame de entrada para a função main é None.")
         return None
 
+    # Passo 1: Criar semana do mes em questão
+    # Define the Spark UDF
+    calculate_week_of_month_udf = udf(calculate_week_of_month, IntegerType())
+
+    # Apply the UDF to the DataFrame to create the new column
+    df = df.withColumn(
+        'week_of_month',
+        calculate_week_of_month_udf(col('transaction_date'), col('reference_date'))
+    )
+
     # Passo 1: Criar identificador de semana global e rank
     df_with_week_ids_and_rank = create_global_week_id_and_rank(df)
 
-    # Passo 2: Calcular features defasadas usando o rank da semana
-    final_df_with_lagged_features = calculate_lagged_features(
+    # Passo 2: Agrupar informações a nivel semanal
+
+    ignore_list = [
+        'descricao', 
+        'distributor_id', 
+        'internal_store_id', 
+        'internal_product_id',
+        'transaction_date',
+        'Vendas_Semanais'
+    ]
+    aggregate_list = [
+        'quantity', 
+        'gross_value',
+        'net_value', 
+        'gross_profit', 
+        'discount', 
+        'taxes',
+    ]
+    aggregation_type = 'sum'
+
+    aggregated_df = aggregate_dataframe(
+    df=df_with_week_ids_and_rank,
+    ignore_cols=ignore_list,
+    agg_cols=aggregate_list,
+    agg_func_type=aggregation_type
+    )
+
+    # Passo 3: Calcular features defasadas usando o rank da semana
+    final_df_with_lagged_features = calculate_lagged_features_optimized(
         df_with_week_ids_and_rank,
         week_windows,
         value_columns,
