@@ -1,0 +1,1 @@
+{"class":"org.apache.spark.ml.feature.OneHotEncoderModel","timestamp":1757804282445,"sparkVersion":"3.5.1","uid":"OneHotEncoder_514e1e9a0c9d","paramMap":{"outputCol":"categoria_pdv_encoded","inputCol":"categoria_pdv_indexed"},"defaultParamMap":{"dropLast":true,"handleInvalid":"error","outputCol":"OneHotEncoder_514e1e9a0c9d__output"}}

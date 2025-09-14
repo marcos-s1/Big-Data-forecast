@@ -1,0 +1,1 @@
+{"class":"org.apache.spark.ml.feature.OneHotEncoderModel","timestamp":1757804285588,"sparkVersion":"3.5.1","uid":"OneHotEncoder_000dcb5cdf65","paramMap":{"inputCol":"global_week_id_indexed","outputCol":"global_week_id_encoded"},"defaultParamMap":{"dropLast":true,"handleInvalid":"error","outputCol":"OneHotEncoder_000dcb5cdf65__output"}}

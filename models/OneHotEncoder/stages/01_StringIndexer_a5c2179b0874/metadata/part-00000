@@ -1,0 +1,1 @@
+{"class":"org.apache.spark.ml.feature.StringIndexerModel","timestamp":1757804275219,"sparkVersion":"3.5.1","uid":"StringIndexer_a5c2179b0874","paramMap":{"outputCol":"categoria_pdv_indexed","inputCol":"categoria_pdv","handleInvalid":"keep"},"defaultParamMap":{"stringOrderType":"frequencyDesc","outputCol":"StringIndexer_a5c2179b0874__output","handleInvalid":"error"}}

@@ -1,0 +1,1 @@
+{"class":"org.apache.spark.ml.feature.OneHotEncoderModel","timestamp":1757804282848,"sparkVersion":"3.5.1","uid":"OneHotEncoder_0d8e1f595b48","paramMap":{"inputCol":"zipcode_indexed","outputCol":"zipcode_encoded"},"defaultParamMap":{"handleInvalid":"error","dropLast":true,"outputCol":"OneHotEncoder_0d8e1f595b48__output"}}
