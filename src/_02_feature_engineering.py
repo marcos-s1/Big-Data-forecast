@@ -122,13 +122,13 @@ def calculate_lagged_features_optimized(df, week_windows, value_columns, aggrega
     if 'count' in aggregation_functions:
         # A sua lógica: criar um dataframe auxiliar com a contagem distinta por semana e loja
         print("Calculando contagem distinta de produtos por semana...")
-        df_distinct_products_weekly = df_result.groupby('pdv', 'week_rank').agg(
-            count('produto').alias('distinct_products_count_weekly')
-        ).dropDuplicates(['pdv', 'week_rank'])
+        df_distinct_products_weekly = df_result.groupby('internal_store_id', 'week_rank').agg(
+            count('internal_product_id').alias('distinct_products_count_weekly')
+        ).dropDuplicates(['internal_store_id', 'week_rank'])
         
         # A correção principal: calculamos a janela móvel neste dataframe auxiliar
         # antes de fazer o join, garantindo que o calculo seja preciso
-        distinct_products_window_spec = lambda window: Window.partitionBy('pdv').orderBy(col('week_rank')).rangeBetween(-window, -1)
+        distinct_products_window_spec = lambda window: Window.partitionBy('internal_store_id').orderBy(col('week_rank')).rangeBetween(-window, -1)
         
         for window in week_windows:
             final_distinct_count = when(
@@ -144,13 +144,13 @@ def calculate_lagged_features_optimized(df, week_windows, value_columns, aggrega
         # Agora, fazemos o join deste dataframe auxiliar com o principal
         df_result = df_result.join(
             df_distinct_products_weekly.drop('distinct_products_count_weekly'), 
-            on=['pdv', 'week_rank'], 
+            on=['internal_store_id', 'week_rank'], 
             how='left'
         )
 
     # Janela para lag-N e agregados móveis
-    base_window_spec = lambda window: Window.partitionBy("pdv", "produto").orderBy(col('week_rank')).rangeBetween(-window, -1)
-    lag_window_spec = Window.partitionBy("pdv", "produto").orderBy(col('week_rank'))
+    base_window_spec = lambda window: Window.partitionBy("internal_store_id", "internal_product_id").orderBy(col('week_rank')).rangeBetween(-window, -1)
+    lag_window_spec = Window.partitionBy("internal_store_id", "internal_product_id").orderBy(col('week_rank'))
     
     expressions = []
     
