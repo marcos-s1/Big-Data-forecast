@@ -1,79 +1,54 @@
 import os
-import shutil
-from pyspark.sql import SparkSession
-from pyspark.ml import Pipeline
-from pyspark.ml.feature import StringIndexer, OneHotEncoder
-from pyspark.ml import PipelineModel
-from pyspark.sql.functions import col
+import pickle
+from pyspark.sql import DataFrame
+from pyspark.sql.functions import col, count, lit, when
 
-def train_and_save_encoder(spark: SparkSession, df, categorical_cols: list, output_model_path: str):
+def group_low_frequency_categories(df: DataFrame, categorical_cols: list, threshold: float = 0.01) -> tuple[DataFrame, dict]:
     """
-    Treina e salva um pipeline de codificação para colunas categóricas.
-    """
-    print("--- Treinando e salvando o modelo de codificação ---")
-    
-    indexed_features = [c + "_indexed" for c in categorical_cols]
-    encoded_features = [c + "_encoded" for c in categorical_cols]
+    Agrupa categorias de baixa frequência em colunas de um DataFrame Spark em uma categoria 'Outros'.
 
-    indexers = [
-        StringIndexer(inputCol=c, outputCol=idx, handleInvalid="keep")
-        for c, idx in zip(categorical_cols, indexed_features)
-    ]
-
-    encoders = [
-        OneHotEncoder(inputCol=idx, outputCol=enc)
-        for idx, enc in zip(indexed_features, encoded_features)
-    ]
-    
-    pipeline = Pipeline(stages=indexers + encoders)
-    
-    print("Treinando o pipeline...")
-    pipeline_model = pipeline.fit(df)
-    
-    try:
-        if os.path.exists(output_model_path):
-            shutil.rmtree(output_model_path)
-            print(f"Diretório de modelo existente removido: {output_model_path}")
-
-        pipeline_model.save(output_model_path)
-        print(f"Modelo de codificação salvo com sucesso em: {output_model_path}")
-        return True
-    except Exception as e:
-        print(f"Erro ao salvar o modelo: {e}")
-        return False
-
-def load_and_transform_data(spark: SparkSession, df, model_path: str, categorical_features: list):
-    """
-    Carrega um modelo de codificação salvo e o aplica a um novo DataFrame.
-    
     Args:
-        spark (SparkSession): Sessão Spark ativa.
-        df (pyspark.sql.DataFrame): DataFrame de entrada.
-        model_path (str): Caminho para o modelo de codificação salvo.
-        categorical_features (list): Lista de colunas categóricas que foram codificadas.
-        
+        df (DataFrame): O DataFrame Spark de entrada.
+        categorical_cols (list): Uma lista de nomes de colunas para processar.
+        threshold (float): O limite de frequência abaixo do qual as categorias serão agrupadas.
+
     Returns:
-        pyspark.sql.DataFrame: DataFrame com as colunas one-hot encoded e sem as originais.
+        tuple[DataFrame, dict]: Um DataFrame Spark processado e um dicionário
+                                com as categorias agrupadas para cada coluna.
     """
-    print("--- Carregando o modelo e aplicando a transformação ---")
+    df_processed = df
+    grouped_categories_map = {}
+
+    total_rows = df.count()
+    if total_rows == 0:
+        print("DataFrame vazio. Nenhuma ação a ser tomada.")
+        return df, {}
     
-    try:
-        # Carrega o modelo de codificação treinado
-        loaded_model = PipelineModel.load(model_path)
-        print(f"Modelo carregado com sucesso de: {model_path}")
-        
-        # Aplica o modelo para transformar o novo DataFrame
-        df_transformed = loaded_model.transform(df)
-        
-        # Remove as colunas categóricas originais e as colunas indexadas temporárias
-        columns_to_drop = categorical_features + [c + "_indexed" for c in categorical_features]
-        df_transformed = df_transformed.drop(*columns_to_drop)
-        
-        print("\nDataFrame transformado com sucesso. Schema:")
-        df_transformed.printSchema()
-        df_transformed.show(5, truncate=False)
-        
-        return df_transformed
-    except Exception as e:
-        print(f"Erro ao carregar ou aplicar o modelo: {e}")
-        return None
+    for c in categorical_cols:
+        if c in df_processed.columns:
+            print(f"Processando a coluna: {c}")
+
+            category_counts = df_processed.groupBy(c).agg(count(c).alias("count"))
+            
+            low_freq_categories_df = category_counts.withColumn(
+                "frequency",
+                col("count") / lit(total_rows)
+            ).filter(col("frequency") < threshold)
+            
+            low_freq_list = [row[c] for row in low_freq_categories_df.collect()]
+
+            if low_freq_list:
+                print(f"  Agrupando {len(low_freq_list)} categorias com frequência < {threshold:.2%} em 'Outros' para a coluna '{c}'")
+                
+                grouped_categories_map[c] = low_freq_list
+                
+                df_processed = df_processed.withColumn(
+                    c,
+                    when(col(c).isin(low_freq_list), lit("Outros")).otherwise(col(c))
+                )
+            else:
+                print(f"  Nenhuma categoria com frequência < {threshold:.2%} para agrupar na coluna '{c}'")
+        else:
+            print(f"Aviso: Coluna '{c}' não encontrada no DataFrame.")
+
+    return df_processed, grouped_categories_map
