@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, year, month, weekofyear, dense_rank, lag, concat, lit, countDistinct, count, sum, avg, min, max, stddev, when, size, collect_set, lpad, cast
+from pyspark.sql.functions import col, year, month, weekofyear, dense_rank, lag, concat, lit, countDistinct, count, mean, sum, avg, min, max, stddev, when, size, collect_set, lpad, cast
 from pyspark.sql.functions import udf, col
 from pyspark.sql.types import IntegerType
 import os
@@ -67,6 +67,39 @@ def create_global_week_id_and_rank(df):
         dense_rank().over(window_rank_spec)
     )
     return df_with_week_rank
+
+def calculate_time_since_last_order(df):
+    """
+    Calcula o tempo_ultimo_pedido (diferença entre a semana atual e a última venda).
+    
+    Args:
+        df (Spark DataFrame): DataFrame com a coluna 'week_rank'.
+        
+    Returns:
+        Spark DataFrame: DataFrame com a nova coluna 'tempo_ultimo_pedido'.
+    """
+    print("Calculando tempo_ultimo_pedido...")
+    
+    window_spec = Window.partitionBy("internal_store_id", "internal_product_id").orderBy("week_rank")
+    
+    # Encontra a semana do último pedido para cada linha
+    df_with_last_order = df.withColumn(
+        "last_order_week",
+        lag(col("week_rank"), offset=1).over(window_spec)
+    )
+    
+    # Calcula a diferença entre a semana atual e a última semana com pedido
+    df_with_time_since_last_order = df_with_last_order.withColumn(
+        "tempo_ultimo_pedido",
+        when(
+            col("last_order_week").isNull(),
+            -1
+        ).otherwise(
+            col("week_rank") - col("last_order_week")
+        )
+    )
+    
+    return df_with_time_since_last_order
 
 def calculate_lagged_features_optimized(df, week_windows, value_columns, aggregation_functions):
     """
@@ -162,54 +195,63 @@ def calculate_lagged_features_optimized(df, week_windows, value_columns, aggrega
     
     return df_with_features
 
-def aggregate_dataframe(df, ignore_cols: list, agg_cols: list, agg_func_type: str):
+def aggregate_dataframe(df, ignore_cols: list, agg_ops):
     """
-    Aggregates a Spark DataFrame by all columns except those in ignore_cols,
-    applying a specified aggregation function to columns in agg_cols.
+    Agrega um DataFrame Spark por todas as colunas, exceto as da lista de ignorar.
+    As operações de agregação são definidas por uma lista ou um dicionário.
 
     Args:
-        df (DataFrame): The input Spark DataFrame.
-        ignore_cols (list): A list of column names to exclude from the grouping keys.
-        agg_cols (list): A list of column names to apply the aggregation function to.
-        agg_func_type (str): The type of aggregation function ('mean', 'sum', 'min').
+        df (DataFrame): O DataFrame Spark de entrada.
+        ignore_cols (list): Uma lista de nomes de colunas para excluir das chaves de agrupamento.
+        agg_ops (list or dict): Uma lista de colunas para aplicar uma agregação padrão,
+                                ou um dicionário de colunas com uma lista de funções.
 
     Returns:
-        DataFrame: The aggregated Spark DataFrame.
+        DataFrame: O DataFrame Spark agregado.
     """
-    # Get all column names from the DataFrame
     all_cols = df.columns
-
-    # Determine the grouping columns (all columns not in ignore_cols)
+    # As chaves de agrupamento são todas as colunas que não estão em ignore_cols e não são as colunas a serem agregadas
+    if isinstance(agg_ops, list):
+        agg_cols = agg_ops
+    elif isinstance(agg_ops, dict):
+        agg_cols = list(agg_ops.keys())
+    else:
+        raise ValueError("agg_ops deve ser uma lista ou um dicionário.")
+    
     group_cols = [c for c in all_cols if c not in ignore_cols and c not in agg_cols]
 
-    # Prepare the aggregation expressions
     agg_exprs = []
-    for col_name in agg_cols:
-        if col_name in all_cols:
-            if agg_func_type.lower() == 'mean':
-                agg_exprs.append(mean(col(col_name)).alias(f'{col_name}'))
-            elif agg_func_type.lower() == 'sum':
+    
+    if isinstance(agg_ops, list):
+        # Lógica para o formato de lista (mantém a estrutura original)
+        agg_func_type = 'sum' # Exemplo de função padrão
+        for col_name in agg_ops:
+            if col_name in all_cols:
                 agg_exprs.append(sum(col(col_name)).alias(f'{col_name}'))
-            elif agg_func_type.lower() == 'min':
-                agg_exprs.append(min(col(col_name)).alias(f'{col_name}'))
+    else:
+        # Lógica para o formato de dicionário (nova funcionalidade)
+        for col_name, func_list in agg_ops.items():
+            if col_name in all_cols:
+                for func_name in func_list:
+                    if func_name.lower() == 'sum':
+                        agg_exprs.append(sum(col(col_name)).alias(f'{col_name}'))
+                    elif func_name.lower() == 'mean':
+                        agg_exprs.append(mean(col(col_name)).alias(f'mean_{col_name}'))
+                    elif func_name.lower() == 'min':
+                        agg_exprs.append(min(col(col_name)).alias(f'min_{col_name}'))
+                    elif func_name.lower() == 'count':
+                        agg_exprs.append(count(col(col_name)).alias(f'quantidade_pedidos'))
+                    else:
+                        print(f"Aviso: Função de agregação '{func_name}' não suportada para coluna '{col_name}'.")
             else:
-                print(f"Warning: Unsupported aggregation function type '{agg_func_type}'. Skipping column '{col_name}'.")
-        else:
-             print(f"Warning: Aggregation column '{col_name}' not found in DataFrame. Skipping.")
+                print(f"Aviso: Coluna '{col_name}' não encontrada no DataFrame.")
 
     if not group_cols:
-        print("Warning: No grouping columns determined. Performing a global aggregation.")
         if agg_exprs:
             return df.agg(*agg_exprs)
         else:
-            print("No aggregation expressions defined.")
             return df
-    elif not agg_exprs:
-        print("Warning: No valid aggregation expressions determined. Returning DataFrame grouped by group_cols without aggregations.")
-        return df.select(group_cols).distinct()
     else:
-        print(f"Grouping by: {group_cols}")
-        print(f"Applying '{agg_func_type}' aggregation to: {agg_cols}")
         return df.groupBy(group_cols).agg(*agg_exprs)
 
 def feature_engineering_pipeline(df, week_windows, value_columns, aggregation_functions, spark_session):
@@ -249,31 +291,29 @@ def feature_engineering_pipeline(df, week_windows, value_columns, aggregation_fu
     ignore_list = [
         'descricao', 
         'distributor_id', 
-        'internal_store_id', 
-        'internal_product_id',
+        'pdv', 
+        'produto',
         'transaction_date',
         'Vendas_Semanais'
     ]
     aggregate_list = [
-        'quantity', 
-        'gross_value',
-        'net_value', 
-        'gross_profit', 
-        'discount', 
-        'taxes',
+        'quantity'
     ]
     aggregation_type = 'sum'
 
+    agg_dict = {"quantity": ['sum', 'count']}
+
     aggregated_df = aggregate_dataframe(
-    df=df_with_week_ids_and_rank,
-    ignore_cols=ignore_list,
-    agg_cols=aggregate_list,
-    agg_func_type=aggregation_type
+        df=df_with_week_ids_and_rank,
+        ignore_cols=ignore_list,
+        agg_ops=agg_dict
     )
+
+    df_with_time_since_order = calculate_time_since_last_order(aggregated_df)
 
     # Passo 3: Calcular features defasadas usando o rank da semana
     final_df_with_lagged_features = calculate_lagged_features_optimized(
-        df_with_week_ids_and_rank,
+        df_with_time_since_order,
         week_windows,
         value_columns,
         aggregation_functions
