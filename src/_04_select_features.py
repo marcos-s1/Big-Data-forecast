@@ -28,7 +28,7 @@ def calculate_wmape(y_true: pd.Series, y_pred: pd.Series) -> float:
 def run_feature_selection(
   df: DataFrame, 
   reference_date_for_validation: str,
-  int, catboost_params: dict, 
+  catboost_params: dict, 
   label_col: str, 
   id_cols: list, 
   ignore_features: list, 
@@ -52,9 +52,11 @@ def run_feature_selection(
     print("--- 1. Preparando os dados para a seleção de features ---")
 
     # --- Divisão Out-of-Time no Spark ---
+
+    df['reference_date'] = pd.to_datetime(df['reference_date']).dt.date
   
-    df_train = df[df["reference_date"] <= pd.to_datetime(df['reference_date']).dt.date]
-    df_val = df[df["reference_date"] > pd.to_datetime(df['reference_date']).dt.date]
+    df_train = df[df["reference_date"] <= reference_date_for_validation]
+    df_val = df[df["reference_date"] > reference_date_for_validation]
 
     # Define a lista completa de features candidatas
     all_features = [c for c in df.columns if c not in [label_col] + id_cols + ignore_features]
