@@ -27,13 +27,13 @@ def calculate_wmape(y_true: pd.Series, y_pred: pd.Series) -> float:
 
 def run_feature_selection(
   df: DataFrame, 
-  reference_date_for_validation: 
+  reference_date_for_validation: str,
   int, catboost_params: dict, 
   label_col: str, 
   id_cols: list, 
   ignore_features: list, 
-  categorical_features: list, 
-  sample_fraction: float):
+  categorical_features: list
+  ):
     """
     Realiza a seleção de features em um pipeline híbrido (Spark -> Pandas).
 
