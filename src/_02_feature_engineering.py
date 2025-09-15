@@ -47,25 +47,36 @@ def create_global_week_id_and_rank(df):
         Spark DataFrame: O DataFrame com as novas colunas 'global_week_id' e 'week_rank'.
     """
     print("Criando identificador de semana global e rank...")
-    # Cria um identificador baseado no ano, mês e semana do mês para ordenação
-    # Formata o mês com zero à esquerda (MM) e concatena as partes
-    df_with_week_id = df.withColumn(
+    # 1. Adiciona a coluna 'Ano' para usar na partição
+    df_with_year = df.withColumn("Ano", year(col("reference_date")))
+
+    # 2. Cria o identificador de semana global para ordenação
+    df_with_week_id = df_with_year.withColumn(
         "global_week_id",
         concat(
-            year(col("reference_date")),
+            col("Ano"),
             lit("-"),
-            lpad(month(col("reference_date")).cast("string"), 2, "0"), # Formata o mês com 2 dígitos
+            lpad(month(col("reference_date")).cast("string"), 2, "0"),
             lit("-"),
             col("week_of_month")
         )
     )
 
-    # Cria um rank sequencial baseado na ordem dos global_week_id distintos
-    window_rank_spec = Window.orderBy("global_week_id")
+    # 3. Cria o rank sequencial, particionando por Ano para reiniciar a contagem
+    window_rank_spec = Window.partitionBy("Ano").orderBy("global_week_id")
     df_with_week_rank = df_with_week_id.withColumn(
         "week_rank",
         dense_rank().over(window_rank_spec)
     )
+
+    # Cria um rank sequencial baseado na ordem dos global_week_id distintos
+    window_rank_spec = Window.orderBy("global_week_id")
+    df_with_week_rank = df_with_week_rank.withColumn(
+      "rank",
+      dense_rank().over(window_rank_spec)
+      
+    )
+
     return df_with_week_rank
 
 def calculate_time_since_last_order(df):
@@ -73,19 +84,19 @@ def calculate_time_since_last_order(df):
     Calcula o tempo_ultimo_pedido (diferença entre a semana atual e a última venda).
     
     Args:
-        df (Spark DataFrame): DataFrame com a coluna 'week_rank'.
+        df (Spark DataFrame): DataFrame com a coluna 'rank'.
         
     Returns:
         Spark DataFrame: DataFrame com a nova coluna 'tempo_ultimo_pedido'.
     """
     print("Calculando tempo_ultimo_pedido...")
     
-    window_spec = Window.partitionBy("internal_store_id", "internal_product_id").orderBy("week_rank")
+    window_spec = Window.partitionBy("internal_store_id", "internal_product_id").orderBy("rank")
     
     # Encontra a semana do último pedido para cada linha
     df_with_last_order = df.withColumn(
         "last_order_week",
-        lag(col("week_rank"), offset=1).over(window_spec)
+        lag(col("rank"), offset=1).over(window_spec)
     )
     
     # Calcula a diferença entre a semana atual e a última semana com pedido
@@ -95,7 +106,7 @@ def calculate_time_since_last_order(df):
             col("last_order_week").isNull(),
             -1
         ).otherwise(
-            col("week_rank") - col("last_order_week")
+            col("rank") - col("last_order_week")
         )
     )
     
@@ -122,17 +133,17 @@ def calculate_lagged_features_optimized(df, week_windows, value_columns, aggrega
     if 'count' in aggregation_functions:
         # A sua lógica: criar um dataframe auxiliar com a contagem distinta por semana e loja
         print("Calculando contagem distinta de produtos por semana...")
-        df_distinct_products_weekly = df_result.groupby('internal_store_id', 'week_rank').agg(
+        df_distinct_products_weekly = df_result.groupby('internal_store_id', 'rank').agg(
             count('internal_product_id').alias('distinct_products_count_weekly')
-        ).dropDuplicates(['internal_store_id', 'week_rank'])
+        ).dropDuplicates(['internal_store_id', 'rank'])
         
         # A correção principal: calculamos a janela móvel neste dataframe auxiliar
         # antes de fazer o join, garantindo que o calculo seja preciso
-        distinct_products_window_spec = lambda window: Window.partitionBy('internal_store_id').orderBy(col('week_rank')).rangeBetween(-window, -1)
+        distinct_products_window_spec = lambda window: Window.partitionBy('internal_store_id').orderBy(col('rank')).rangeBetween(-window, -1)
         
         for window in week_windows:
             final_distinct_count = when(
-                col('week_rank') <= window,
+                col('rank') <= window,
                 lit(None)
             ).otherwise(
                 sum(col('distinct_products_count_weekly')).over(distinct_products_window_spec(window))
@@ -144,13 +155,13 @@ def calculate_lagged_features_optimized(df, week_windows, value_columns, aggrega
         # Agora, fazemos o join deste dataframe auxiliar com o principal
         df_result = df_result.join(
             df_distinct_products_weekly.drop('distinct_products_count_weekly'), 
-            on=['internal_store_id', 'week_rank'], 
+            on=['internal_store_id', 'rank'], 
             how='left'
         )
 
     # Janela para lag-N e agregados móveis
-    base_window_spec = lambda window: Window.partitionBy("internal_store_id", "internal_product_id").orderBy(col('week_rank')).rangeBetween(-window, -1)
-    lag_window_spec = Window.partitionBy("internal_store_id", "internal_product_id").orderBy(col('week_rank'))
+    base_window_spec = lambda window: Window.partitionBy("internal_store_id", "internal_product_id").orderBy(col('rank')).rangeBetween(-window, -1)
+    lag_window_spec = Window.partitionBy("internal_store_id", "internal_product_id").orderBy(col('rank'))
     
     expressions = []
     
