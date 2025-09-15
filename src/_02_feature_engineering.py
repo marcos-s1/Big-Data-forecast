@@ -194,7 +194,7 @@ def calculate_lagged_features_optimized(df, week_windows, value_columns, aggrega
 
                 if agg_expr is not None:
                     final_agg_expr = when(
-                        col('week_rank') <= window,
+                        col('rank') <= window,
                         lit(None)
                     ).otherwise(
                         agg_expr.over(base_window_spec(window))
@@ -295,6 +295,8 @@ def feature_engineering_pipeline(df, week_windows, value_columns, aggregation_fu
     )
 
     # Passo 1: Criar identificador de semana global e rank
+    df_with_week_ids_and_rank = create_global_week_id_and_rank(df)
+
     df_with_week_ids_and_rank = create_global_week_id_and_rank(df)
 
     # Passo 2: Agrupar informações a nivel semanal
