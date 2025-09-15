@@ -7,6 +7,7 @@ import warnings
 from tqdm.auto import tqdm
 from pyspark.sql import DataFrame
 from pyspark.sql.functions import col, lit, abs as spark_abs
+import datetime
 
 # Define a opção para mostrar todas as colunas
 pd.set_option('display.max_columns', None)
@@ -24,33 +25,39 @@ def calculate_wmape(y_true: pd.Series, y_pred: pd.Series) -> float:
         return float('inf')
     return np.sum(np.abs(y_true - y_pred)) / np.sum(y_true)
 
-def run_feature_selection(df: DataFrame, weeks_for_validation: int, catboost_params: dict, label_col: str, id_cols: list, ignore_features: list, categorical_features: list, sample_fraction: float):
+def run_feature_selection(
+  df: DataFrame, 
+  reference_date_for_validation: 
+  int, catboost_params: dict, 
+  label_col: str, 
+  id_cols: list, 
+  ignore_features: list, 
+  categorical_features: list, 
+  sample_fraction: float):
     """
     Realiza a seleção de features em um pipeline híbrido (Spark -> Pandas).
 
     Args:
         df_spark (DataFrame): O DataFrame de entrada.
-        weeks_for_validation (int): O número de semanas a ser usado para a validação out-of-time.
+        reference_date_for_validation (int): data de referencia que será usada na validação out-of-time.
         catboost_params (dict): Dicionário de parâmetros do CatBoost.
         label_col (str): Nome da coluna target.
         id_cols (list): Lista de colunas de identificação.
         ignore_features (list): Lista de features a serem ignoradas na modelagem.
         categorical_features (list): Lista de features categóricas.
-        sample_fraction (float): Fração de amostragem a ser usada para o treino.
 
     Returns:
         list: Lista final de features selecionadas.
     """
     print("--- 1. Preparando os dados para a seleção de features ---")
 
+    # --- Divisão Out-of-Time no Spark ---
+  
+    df_train = df[df["reference_date"] <= pd.to_datetime(df['reference_date']).dt.date]
+    df_val = df[df["reference_date"] > pd.to_datetime(df['reference_date']).dt.date]
+
     # Define a lista completa de features candidatas
     all_features = [c for c in df.columns if c not in [label_col] + id_cols + ignore_features]
-
-    # --- Divisão Out-of-Time no Spark ---
-    max_week_rank = df["week_rank"].max()
-    cutoff_week = max_week_rank - weeks_for_validation
-    df_train = df[df["week_rank"] <= cutoff_week]
-    df_val = df[df["week_rank"] > cutoff_week]
 
     # Preparando dados Pandas para o CatBoost
     X_train = df_train[all_features]
