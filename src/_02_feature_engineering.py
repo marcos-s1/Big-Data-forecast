@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, year, month, weekofyear, dense_rank, lag, concat, lit, countDistinct, count, mean, sum, avg, min, max, stddev, when, size, collect_set, lpad, cast
+from pyspark.sql.functions import col, isnan, year, month, weekofyear, dense_rank, lag, concat, lit, countDistinct, count, mean, sum, avg, min, max, stddev, when, size, collect_set, lpad, cast
 from pyspark.sql.functions import udf, col
 from pyspark.sql.types import IntegerType
 import os
