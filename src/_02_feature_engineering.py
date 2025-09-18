@@ -127,7 +127,7 @@ def calculate_lagged_features_optimized(df, week_windows, value_columns, aggrega
     """
     print("Calculando features defasadas e de janela móvel de forma otimizada...")
     
-    df_result = df.filter(col('quantity') > 0)
+    df_result = df.filter((col('quantity') > 0) | isnan(col('quantity')))
     
     # Adicionando a contagem distinta de produtos por loja por semana
     if 'count' in aggregation_functions:
