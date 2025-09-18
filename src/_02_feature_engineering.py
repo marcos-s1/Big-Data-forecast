@@ -127,13 +127,13 @@ def calculate_lagged_features_optimized(df, week_windows, value_columns, aggrega
     """
     print("Calculando features defasadas e de janela móvel de forma otimizada...")
     
-    df_result = df.filter((col('quantity') > 0) | isnan(col('quantity')))
+    df_result = df
     
     # Adicionando a contagem distinta de produtos por loja por semana
     if 'count' in aggregation_functions:
         # A sua lógica: criar um dataframe auxiliar com a contagem distinta por semana e loja
         print("Calculando contagem distinta de produtos por semana...")
-        df_distinct_products_weekly = df_result.groupby('internal_store_id', 'rank').agg(
+        df_distinct_products_weekly = df_result.filter((col('quantity') > 0) | col('quantity').isNull() | (col('quantity') == -1)).groupby('internal_store_id', 'rank').agg(
             count('internal_product_id').alias('distinct_products_count_weekly')
         ).dropDuplicates(['internal_store_id', 'rank'])
         
@@ -158,6 +158,8 @@ def calculate_lagged_features_optimized(df, week_windows, value_columns, aggrega
             on=['internal_store_id', 'rank'], 
             how='left'
         )
+
+        df_result = df_result.fillna(-1)
 
     # Janela para lag-N e agregados móveis
     base_window_spec = lambda window: Window.partitionBy("internal_store_id", "internal_product_id").orderBy(col('rank')).rangeBetween(-window, -1)
