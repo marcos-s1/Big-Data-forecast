@@ -133,9 +133,11 @@ def calculate_lagged_features_optimized(df, week_windows, value_columns, aggrega
     if 'count' in aggregation_functions:
         # A sua lógica: criar um dataframe auxiliar com a contagem distinta por semana e loja
         print("Calculando contagem distinta de produtos por semana...")
-        df_distinct_products_weekly = df_result.filter((col('quantity') > 0) | col('quantity').isNull() | (col('quantity') == -1)).groupby('internal_store_id', 'rank').agg(
-            count('internal_product_id').alias('distinct_products_count_weekly')
-        ).dropDuplicates(['internal_store_id', 'rank'])
+        df_distinct_products_weekly = df_result.repartition('internal_store_id', 'rank') \
+    .groupby('internal_store_id', 'rank') \
+    .agg(
+        count('internal_product_id').alias('distinct_products_count_weekly')
+    ).dropDuplicates(['internal_store_id', 'rank'])
         
         # A correção principal: calculamos a janela móvel neste dataframe auxiliar
         # antes de fazer o join, garantindo que o calculo seja preciso
